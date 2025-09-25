@@ -1,4 +1,5 @@
 from fastapi import FastAPI, Body
+from fastapi.middleware.cors import CORSMiddleware
 import pytesseract
 from PIL import Image
 import base64, io, re
@@ -8,7 +9,16 @@ logging.basicConfig(level=logging.INFO)
 
 app = FastAPI()
 
-# Tesseract will be available in PATH on Linux
+# 🔹 CORS aktivieren
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],   # für Tests offen lassen, später einschränken
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
 
 @app.post("/ocr")
 async def ocr(base64_image: str = Body(..., embed=True), lang: str = Body("deu")):
@@ -30,7 +40,7 @@ async def ocr(base64_image: str = Body(..., embed=True), lang: str = Body("deu")
         text = pytesseract.image_to_string(img, lang=lang)
         logging.info("OCR Ergebnis: %s", text)
 
-        # Regex für Muster: 8-stellige Zahl / weitere Zahl
+        # 🔹 Regex für Muster: 8-stellige Zahl / weitere Zahl
         matches = re.findall(r"(\d{8})\s*\/\s*\d+", text)
 
         if matches:
