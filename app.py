@@ -320,7 +320,9 @@ class OCRProcessor:
         all_numbers = []
         number_confidence = {}
         
-        pattern = r"(\d{8})(?:\s*[\/\s]\s*\d+)"
+        # Match 8 digits followed by slash OR any (unicode) space(s) then digits
+        # Includes normal spaces, NBSP (\u00A0), and thin/zero-width spaces (\u2000-\u200B)
+        pattern = r"(\d{8})(?:[\s\u00A0\u2000-\u200B]*[\/\s\u00A0\u2000-\u200B]+\d+)"
         
         for text in results:
             if text:
@@ -385,7 +387,7 @@ async def ocr(base64_image: str = Body(..., embed=True), lang: str = Body("deu")
 
         # Nachgelagerte Formatierung des Textes und Regex nur darauf anwenden
         formatted_text = ocr_processor.format_text_with_coords(img, lang, config="--oem 1 --psm 6")
-        pattern = r"(\d{8})(?:\s*[\/\s]\s*\d+)"
+        pattern = r"(\d{8})(?:[\s\u00A0\u2000-\u200B]*[\/\s\u00A0\u2000-\u200B]+\d+)"
         formatted_matches = re.findall(pattern, formatted_text)
         if formatted_matches:
             best_num = formatted_matches[0]
