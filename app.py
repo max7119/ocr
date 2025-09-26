@@ -387,8 +387,10 @@ async def ocr(base64_image: str = Body(..., embed=True), lang: str = Body("deu")
 
         # Nachgelagerte Formatierung des Textes und Regex nur darauf anwenden
         formatted_text = ocr_processor.format_text_with_coords(img, lang, config="--oem 1 --psm 6")
-        pattern = r"(\d{8})(?:[\s\u00A0\u2000-\u200B]*[\/\s\u00A0\u2000-\u200B]+\d+)"
-        formatted_matches = re.findall(pattern, formatted_text)
+        # Unicode-Whitespace normalisieren und '/' wie Space behandeln
+        normalized_text = re.sub(r"[\s\u00A0\u2000-\u200B]+", " ", formatted_text.replace("/", " "))
+        pattern = r"(\d{8})\s+\d+"
+        formatted_matches = re.findall(pattern, normalized_text)
         if formatted_matches:
             best_num = formatted_matches[0]
             result["numbers"] = [best_num]
@@ -421,10 +423,26 @@ async def ocr_fast(base64_image: str = Body(..., embed=True), lang: str = Body("
         
         # Schnellere Formatierung über Koordinaten (direkt auf Originalbild)
         formatted_text = ocr_processor.format_text_with_coords(img, lang, config="--oem 1 --psm 6")
-        pattern = r"(\d{8})\s*\/\s*\d+"
-        matches = re.findall(pattern, formatted_text)
-        best = [matches[0]] if matches else []
-        return {"numbers": best, "raw_text": formatted_text.strip()}
+        # Unicode-Whitespace normalisieren und '/' wie Space behandeln
+        normalized_text = re.sub(r"[\s\u00A0\u2000-\u200B]+", " ", formatted_text.replace("/", " "))
+        pattern = r"(\d{8})\s+\d+"
+        matches = re.findall(pattern, normalized_text)
+        # Zähle Treffer und normalisiere Confidence (Top = 100)
+        number_confidence = {}
+        for m in matches:
+            number_confidence[m] = number_confidence.get(m, 0) + 1
+        sorted_numbers = sorted(number_confidence.items(), key=lambda x: x[1], reverse=True)
+        best = [sorted_numbers[0][0]] if sorted_numbers else []
+        max_count = sorted_numbers[0][1] if sorted_numbers else 0
+        confidence_scores = {num: (100.0 if max_count == 0 else round((cnt / max_count) * 100.0, 2)) for num, cnt in sorted_numbers}
+        consensus_strength = (max(confidence_scores.values()) if confidence_scores else 0)
+
+        return {
+            "numbers": best,
+            "confidence_scores": confidence_scores,
+            "consensus_strength": consensus_strength,
+            "raw_text": formatted_text.strip(),
+        }
         
     except Exception as e:
         logging.error("Fehler: %s", e, exc_info=True)
