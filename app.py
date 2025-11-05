@@ -9,6 +9,7 @@ import io
 import logging
 import platform
 import os
+from concurrent.futures import ThreadPoolExecutor
 
 logging.basicConfig(
     level=logging.INFO,
@@ -31,23 +32,43 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Thread-Pool für Preprocessing
+executor = ThreadPoolExecutor(max_workers=2)
+
 
 def preprocess_image(img: Image.Image) -> Image.Image:
-    """Einfache Bildvorverarbeitung für bessere OCR-Erkennung"""
-    img_cv = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
-    gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
+    """Optimierte Bildvorverarbeitung für schnellere OCR-Erkennung"""
+    # Konvertierung zu Graustufen
+    if img.mode == 'RGB':
+        img_cv = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
+        gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
+    elif img.mode == 'L':
+        gray = np.array(img)
+    else:
+        img_cv = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
+        gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
     
-    # Hochskalierung für bessere Erkennung
     height, width = gray.shape[:2]
-    upscaled = cv2.resize(gray, (width*2, height*2), interpolation=cv2.INTER_CUBIC)
     
-    # OTSU-Binarization
+    # Bedingte Hochskalierung: Nur bei kleinen Bildern (< 1000px)
+    # Große Bilder werden nicht hochskaliert, um Zeit zu sparen
+    if width < 1000 or height < 1000:
+        upscaled = cv2.resize(gray, (width*2, height*2), interpolation=cv2.INTER_CUBIC)
+    else:
+        # Bei großen Bildern direkt verwenden, spart Zeit
+        upscaled = gray
+    
+    # OTSU-Binarization (schnell und effektiv)
     _, binary = cv2.threshold(upscaled, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     
-    # Leichte Rauschentfernung
-    denoised = cv2.fastNlMeansDenoising(binary, None, 10, 7, 21)
+    # Denoising nur bei sehr kleinen Bildern oder bei hohem Rauschen
+    # Bei größeren Bildern überspringen wir Denoising für Geschwindigkeit
+    if width * height < 500000:  # Nur bei kleinen Bildern (< ~700x700px)
+        # Schnellere Denoising-Parameter
+        denoised = cv2.fastNlMeansDenoising(binary, None, 5, 5, 7)
+        return Image.fromarray(denoised)
     
-    return Image.fromarray(denoised)
+    return Image.fromarray(binary)
 
 
 @app.post("/ocr-fast")
@@ -67,14 +88,17 @@ async def ocr_fast(base64_image: str = Body(..., embed=True), lang: str = Body("
         img_bytes = base64.b64decode(base64_image)
         img = Image.open(io.BytesIO(img_bytes))
         
-        # Bildvorverarbeitung
+        # Bildvorverarbeitung (kann parallel laufen, aber hier sequenziell für Einfachheit)
         preprocessed_img = preprocess_image(img)
         
-        # OCR ausführen
+        # OCR ausführen mit optimierter Config:
+        # --oem 3: LSTM OCR Engine (schneller als --oem 1 bei ähnlicher Qualität)
+        # --psm 6: Einheitlicher Textblock (schneller als andere Modi)
+        # preserve_interword_spaces=1: Behält Abstände zwischen Wörtern
         text = pytesseract.image_to_string(
             preprocessed_img, 
             lang=lang, 
-            config="--oem 1 --psm 6 -c preserve_interword_spaces=1"
+            config="--oem 3 --psm 6 -c preserve_interword_spaces=1"
         )
         
         logger.info(f"OCR completed, text length: {len(text)} characters")
